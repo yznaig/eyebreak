@@ -1,0 +1,7 @@
+{
+  "intervalMinutes": 22,
+  "sound": "ding.mp3",
+  "checkInEvery": 3,
+  "checkInSound": "ding2.mp3",
+  "volume": 1.0
+}

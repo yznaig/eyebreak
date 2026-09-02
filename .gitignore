@@ -1,0 +1,6 @@
+# your own sounds stay local; only the built-in defaults are tracked
+sounds/*
+!sounds/default-ding.wav
+!sounds/default-checkin.wav
+*.flag
+error.log
