@@ -53,9 +53,9 @@ MP3, WAV, MP4, M4A all work. Until you add your own, two built-in chimes are use
 ```
 
 - `intervalMinutes` — minutes between dings.
-- `sound` — the regular ding. Set to `"random"` to shuffle through every file in `sounds` instead.
+- `sound` — the regular ding. Set to `"random"` to shuffle through every file in `sounds` instead, or to a list like `["a.mp3", "b.mp3"]` to pick one of those at random each time.
 - `checkInEvery` — every Nth ding is a check-in. `0` turns check-ins off.
-- `checkInSound` — the check-in sound.
+- `checkInSound` — the check-in sound. Takes the same forms as `sound`.
 - `volume` — `0.0` to `1.0`.
 
 ## Updating

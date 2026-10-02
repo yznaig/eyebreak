@@ -4,8 +4,10 @@
 #   enabled.flag  present = ding, absent = silent   (Toggle-On.cmd / Toggle-Off.cmd)
 #   quit.flag     present = exit                    (Quit.cmd)
 # Config: config.json  { intervalMinutes, sound, checkInEvery, checkInSound, volume }  — re-read automatically when edited.
-#   sound: a filename in sounds\ (default ding.mp3), or "random" to shuffle every file in sounds\.
+#   sound: a filename in sounds\ (default ding.mp3), "random" to shuffle every file in sounds\,
+#          or a list of filenames (["a.mp3","b.mp3"]) to pick one of those at random.
 #   checkInEvery / checkInSound: every Nth ding plays checkInSound instead (the "look around, anything else to do?" cue).
+#          checkInSound takes the same forms as sound.
 #   Set checkInEvery to 0 to disable.
 # If a configured file is missing, the built-in default-ding.wav / default-checkin.wav play instead.
 # Screen off (monitor power-down, not PC sleep) suspends dings; the clock restarts when the screen comes back.
@@ -82,6 +84,7 @@ function Load-Config {
 
 # Resolve a sound name to a file. A filename plays that file, else the built-in fallback for its role.
 # "random" picks a random file from sounds\ (never the same one twice in a row; built-ins only if nothing else).
+# A list picks at random among the listed files that exist (same no-repeat rule), else the fallback.
 $script:lastSound = $null
 function Get-SoundFiles {
     $files = @(Get-ChildItem (Join-Path $Root 'sounds') -File -ErrorAction SilentlyContinue |
@@ -89,14 +92,18 @@ function Get-SoundFiles {
     $own = @($files | Where-Object { $_.Name -notlike 'default-*' })
     if ($own.Count -gt 0) { return $own } else { return $files }
 }
-function Resolve-Sound([string]$mode, [string]$fallback) {
+function Resolve-Sound($mode, [string]$fallback) {
     $dir = Join-Path $Root 'sounds'
-    if ($mode -ne 'random') {
-        $named = Join-Path $dir $mode
-        if (Test-Path $named) { return $named }
+    $files = $null
+    if ($mode -is [array]) {
+        $files = @($mode | ForEach-Object { Get-Item -LiteralPath (Join-Path $dir "$_") -ErrorAction SilentlyContinue })
+        if ($files.Count -eq 0) { $files = $null; $mode = '' }   # none of the listed files exist: use the fallback
+    }
+    if (-not $files -and $mode -ne 'random') {
+        if ($mode -and (Test-Path -LiteralPath (Join-Path $dir $mode))) { return (Join-Path $dir $mode) }
         if ($fallback -and (Test-Path (Join-Path $dir $fallback))) { return (Join-Path $dir $fallback) }
     }
-    $files = Get-SoundFiles
+    if (-not $files) { $files = Get-SoundFiles }
     if ($files.Count -eq 0) { return $null }
     $pool = @($files | Where-Object { $_.FullName -ne $script:lastSound })
     if ($pool.Count -eq 0) { $pool = $files }
@@ -107,7 +114,7 @@ function Resolve-Sound([string]$mode, [string]$fallback) {
 
 # ---- sound -------------------------------------------------------------------
 $script:player = New-Object System.Windows.Media.MediaPlayer
-function Play-Sound([string]$name = $script:cfg.sound, [string]$fallback = 'default-ding.wav') {
+function Play-Sound($name = $script:cfg.sound, [string]$fallback = 'default-ding.wav') {
     $file = Resolve-Sound $name $fallback
     if ($file) {
         try {
