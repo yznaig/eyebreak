@@ -4,3 +4,4 @@ sounds/*
 !sounds/default-checkin.wav
 *.flag
 error.log
+eyebreak.log

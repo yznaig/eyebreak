@@ -36,7 +36,7 @@ MP3, WAV, MP4, M4A all work. Until you add your own, two built-in chimes are use
 
 **Scripts** in the folder, for keyboard shortcuts or Stream Deck style use: `Toggle-On.cmd`, `Toggle-Off.cmd`, `Quit.cmd`, `Start.cmd`.
 
-**Screen off** — when your monitor goes to sleep (screen goes black), dings are suspended. When it wakes, the clock restarts from that moment.
+**Screen off** — when your monitor goes to sleep (screen goes black), dings are suspended and the countdown pauses. When it wakes, the countdown picks up where it stopped. If the screen was off for 5 minutes or more, that counts as your break and the clock restarts instead.
 
 ## Settings
 
@@ -48,7 +48,8 @@ MP3, WAV, MP4, M4A all work. Until you add your own, two built-in chimes are use
   "sound": "ding.mp3",
   "checkInEvery": 3,
   "checkInSound": "ding2.mp3",
-  "volume": 1.0
+  "volume": 1.0,
+  "breakMinutes": 5
 }
 ```
 
@@ -57,10 +58,11 @@ MP3, WAV, MP4, M4A all work. Until you add your own, two built-in chimes are use
 - `checkInEvery` — every Nth ding is a check-in. `0` turns check-ins off.
 - `checkInSound` — the check-in sound. Takes the same forms as `sound`.
 - `volume` — `0.0` to `1.0`.
+- `breakMinutes` — how long the screen has to stay off to count as a break and restart the clock. Shorter than that, the countdown just pauses. `0` restarts the clock on every screen wake.
 
 ## Updating
 
-Download the new version and run `Install.cmd` again. Your config and sounds are never overwritten.
+Download the new version and run `Install.cmd` again. It stops the running copy, replaces the script, and starts it again. Your config and sounds are never overwritten; a setting your config doesn't have yet uses its default.
 
 ## Uninstall
 
@@ -69,6 +71,8 @@ Run `Uninstall.cmd` in the installed folder. It stops the app and removes the St
 ## How it works
 
 `eyebreak.ps1` runs hidden (launched through `start-hidden.vbs` so no console window flashes) and ticks once a second. The tray icon is a WinForms `NotifyIcon`; sound plays through the WPF `MediaPlayer`, so anything Windows Media can decode works. Screen-off detection registers for the `GUID_CONSOLE_DISPLAY_STATE` power notification. All controls — tray menu, the `.cmd` scripts, startup — go through two flag files (`enabled.flag`, `quit.flag`), so there's one code path. If something goes wrong in the hidden process, it writes `error.log` next to the script.
+
+**Did it ding?** `eyebreak.log` next to the script has a line for every ding, a line when it played to the end, and a line every time the clock restarted and why. If a sound fails or doesn't start within five seconds, the Windows system beep plays instead and the log says so. The log shows what the app did, not what reached your ears: with the output muted or pointed at another device, it still records a played ding. It trims itself to the last 2000 lines once it passes 512 KB.
 
 Requires Windows 10 or 11. Nothing to install: PowerShell 5.1 and .NET Framework are already part of Windows.
 

@@ -7,6 +7,8 @@ set "DEST=%~1"
 if "%DEST%"=="" set "DEST=%LOCALAPPDATA%\EyeBreak"
 if "%DEST:~-1%"=="\" set "DEST=%DEST:~0,-1%"
 set "SRC=%~dp0"
+rem A running copy keeps the old script in memory: ask it to quit and give it a moment.
+if exist "%DEST%\eyebreak.ps1" ( type nul > "%DEST%\quit.flag" & ping -n 4 127.0.0.1 >nul )
 if /i "%SRC:~0,-1%"=="%DEST%" goto :shortcut
 
 if not exist "%DEST%\sounds" mkdir "%DEST%\sounds"
