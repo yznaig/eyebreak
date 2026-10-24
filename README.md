@@ -40,7 +40,7 @@ MP3, WAV, MP4, M4A all work. Until you add your own, two built-in chimes are use
 
 ## Settings
 
-`config.json` in the installed folder. Edits apply live.
+`config.json` in the installed folder. Edits apply live; only a new `intervalMinutes` restarts the countdown, and a file that doesn't parse is ignored (the previous settings stay).
 
 ```json
 {
@@ -72,7 +72,9 @@ Run `Uninstall.cmd` in the installed folder. It stops the app and removes the St
 
 `eyebreak.ps1` runs hidden (launched through `start-hidden.vbs` so no console window flashes) and ticks once a second. The tray icon is a WinForms `NotifyIcon`; sound plays through the WPF `MediaPlayer`, so anything Windows Media can decode works. Screen-off detection registers for the `GUID_CONSOLE_DISPLAY_STATE` power notification. All controls — tray menu, the `.cmd` scripts, startup — go through two flag files (`enabled.flag`, `quit.flag`), so there's one code path. If something goes wrong in the hidden process, it writes `error.log` next to the script.
 
-**Did it ding?** `eyebreak.log` next to the script has a line for every ding, a line when it played to the end, and a line every time the clock restarted and why. If a sound fails or doesn't start within five seconds, the Windows system beep plays instead and the log says so. The log shows what the app did, not what reached your ears: with the output muted or pointed at another device, it still records a played ding. It trims itself to the last 2000 lines once it passes 512 KB.
+**Did it ding?** `eyebreak.log` next to the script has a line for every ding with the Windows output it went to, a line when it played to the end confirming the sound reached that output, and a line every time the clock restarted and why. If a sound fails or doesn't start within five seconds, EyeBreak retries it once with a fresh player. If that fails too, or a ding ends without any sound reaching an output, it asks Windows for the system beep and shows a notification. The log shows what reached the output, not your ears: a muted speaker or an unplugged jack still logs a level. It trims itself to the last 2000 lines once it passes 512 KB.
+
+**Music software.** A program using an ASIO driver (for example Ableton Live with ASIO4ALL) can take over the sound device, so no other program can play through it. While it's open, dings fail or go silent; EyeBreak shows a notification instead.
 
 Requires Windows 10 or 11. Nothing to install: PowerShell 5.1 and .NET Framework are already part of Windows.
 
