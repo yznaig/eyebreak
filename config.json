@@ -4,5 +4,6 @@
   "checkInEvery": 3,
   "checkInSound": "ding2.mp3",
   "volume": 1.0,
-  "breakMinutes": 5
+  "breakMinutes": 5,
+  "duckOthersTo": 0.25
 }
