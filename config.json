@@ -5,5 +5,6 @@
   "checkInSound": "ding2.mp3",
   "volume": 1.0,
   "breakMinutes": 5,
-  "duckOthersTo": 0.25
+  "duckOthersTo": 0.25,
+  "holdWhileRecording": ["Wispr Flow"]
 }

@@ -14,8 +14,10 @@
 #   the countdown picks up where it stopped, unless it was off for breakMinutes or longer: that counts as the break,
 #   and the clock restarts. Set breakMinutes to 0 to restart on every screen wake.
 # duckOthersTo: while a ding plays, other apps (music, browser) are turned down to this share of their volume and put
-#   back when it ends (default 0.25; 1 turns it off). Their levels are saved to ducked.txt first, so a crash mid-ding
-#   is undone at the next start.
+#   back when it ends (default 0.25; 1 turns it off). One that another app moved during the ding is put back once
+#   that app lets go. Their levels are saved to ducked.txt first, so a crash mid-ding is undone at the next start.
+# holdWhileRecording: process names of dictation apps that mute other audio while recording (default ["Wispr Flow"]).
+#   A ding that comes due while one records waits and plays right after; [] turns this off.
 # eyebreak.log records every ding with the Windows output it went to, whether it played to the end and reached that
 #   output (a signal meter, read before volume), or why it failed, and every clock restart with its reason. A failed ding is retried once
 #   with a fresh player; if that fails too, or a ding ends without any sound reaching an output, a notification shows.
@@ -137,8 +139,6 @@ public static class EyeAudio {
     [Guid("87CE5498-68D6-44E5-9215-6DA47EF883D8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     interface ISimpleAudioVolume { int SetMasterVolume(float v, IntPtr ctx); int GetMasterVolume(out float v); int SetMute(bool m, IntPtr ctx); int GetMute(out bool m); }
     const int RENDER = 0, MULTIMEDIA = 1, ACTIVE = 1, CLSCTX_ALL = 23;
-    class Ducked { public ISimpleAudioVolume Vol; public float Orig; public float Set; }
-    static List<Ducked> ducked = new List<Ducked>();
     static string SessionId(IAudioSessionControl2 sc) {
         IntPtr p; sc.GetSessionIdentifier(out p);
         string id = Marshal.PtrToStringUni(p); Marshal.FreeCoTaskMem(p);
@@ -167,7 +167,6 @@ public static class EyeAudio {
     // Turn every other app's session down to factor x its volume. Returns "session id<TAB>original<TAB>set" rows to
     // save for crash recovery, or null on failure. System sounds (pid 0) and this process are left alone.
     public static string[] Duck(int pid, float factor) {
-        Restore();
         List<string> rows = new List<string>();
         try {
             foreach (KeyValuePair<int, IAudioSessionControl2> kv in Sessions()) {
@@ -177,44 +176,60 @@ public static class EyeAudio {
                 if (v <= 0.001f) continue;
                 float nv = v * factor;
                 vol.SetMasterVolume(nv, IntPtr.Zero);
-                Ducked dk = new Ducked(); dk.Vol = vol; dk.Orig = v; dk.Set = nv;
-                ducked.Add(dk);
                 rows.Add(SessionId(kv.Value) + "\t" + v.ToString(CultureInfo.InvariantCulture) + "\t" + nv.ToString(CultureInfo.InvariantCulture));
             }
             return rows.ToArray();
         } catch { return rows.Count > 0 ? rows.ToArray() : null; }
     }
-    // Put ducked sessions back. A session whose volume someone changed meanwhile is left where they put it.
-    public static int Restore() {
-        int n = 0;
-        foreach (Ducked dk in ducked) {
-            try {
-                float cur; dk.Vol.GetMasterVolume(out cur);
-                if (Math.Abs(cur - dk.Set) < 0.01f) { dk.Vol.SetMasterVolume(dk.Orig, IntPtr.Zero); n++; }
-            } catch { }
-        }
-        ducked.Clear();
-        return n;
-    }
-    // After a crash mid-ding: put back the sessions in the saved rows that are still at the ducked volume.
-    public static int RestoreSaved(string[] rows) {
+    // Put back each saved session that is still at the volume Duck set. Returns the rows still owed: sessions some
+    // other app moved meanwhile (dictation apps mute this way, then restore what they saw: the ducked level).
+    // A session back at its original volume, or gone, is dropped.
+    public static string[] RestoreRows(string[] rows) {
+        Dictionary<string, string> owed = new Dictionary<string, string>();
         Dictionary<string, float[]> saved = new Dictionary<string, float[]>();
         foreach (string r in rows) {
             string[] f = r.Split('\t');
             if (f.Length != 3) continue;
             saved[f[0]] = new float[] { float.Parse(f[1], CultureInfo.InvariantCulture), float.Parse(f[2], CultureInfo.InvariantCulture) };
         }
-        int n = 0;
         try {
             foreach (KeyValuePair<int, IAudioSessionControl2> kv in Sessions()) {
+                string id = SessionId(kv.Value);
                 float[] ov;
-                if (!saved.TryGetValue(SessionId(kv.Value), out ov)) continue;
+                if (!saved.TryGetValue(id, out ov)) continue;
                 ISimpleAudioVolume vol = (ISimpleAudioVolume)kv.Value;
                 float cur; vol.GetMasterVolume(out cur);
-                if (Math.Abs(cur - ov[1]) < 0.01f) { vol.SetMasterVolume(ov[0], IntPtr.Zero); n++; }
+                if (Math.Abs(cur - ov[1]) < 0.01f) vol.SetMasterVolume(ov[0], IntPtr.Zero);
+                else if (Math.Abs(cur - ov[0]) >= 0.01f)
+                    owed[id] = id + "\t" + ov[0].ToString(CultureInfo.InvariantCulture) + "\t" + ov[1].ToString(CultureInfo.InvariantCulture);
+            }
+        } catch { return rows; }
+        return new List<string>(owed.Values).ToArray();
+    }
+    // The first of the named processes that is recording from a microphone right now, or null.
+    public static string Recording(string[] names) {
+        try {
+            IMMDeviceEnumerator en = (IMMDeviceEnumerator)new MMDeviceEnumeratorCom();
+            IMMDeviceCollection col; en.EnumAudioEndpoints(1, ACTIVE, out col);
+            int n; col.GetCount(out n);
+            for (int i = 0; i < n; i++) {
+                IMMDevice d; col.Item(i, out d);
+                Guid sg = typeof(IAudioSessionManager2).GUID; object smo;
+                d.Activate(ref sg, CLSCTX_ALL, IntPtr.Zero, out smo);
+                IAudioSessionEnumerator se; ((IAudioSessionManager2)smo).GetSessionEnumerator(out se);
+                int sn; se.GetCount(out sn);
+                for (int j = 0; j < sn; j++) {
+                    IAudioSessionControl2 sc; se.GetSession(j, out sc);
+                    int st; sc.GetState(out st);
+                    if (st != 1) continue;
+                    int spid; sc.GetProcessId(out spid);
+                    string pn;
+                    try { pn = System.Diagnostics.Process.GetProcessById(spid).ProcessName; } catch { continue; }
+                    foreach (string want in names) if (string.Equals(pn, want, StringComparison.OrdinalIgnoreCase)) return pn;
+                }
             }
         } catch { }
-        return n;
+        return null;
     }
     static string Name(IMMDevice d) {
         IPropertyStore ps; d.OpenPropertyStore(0, out ps);
@@ -266,7 +281,7 @@ Trim-Log
 $script:cfg = $null
 $script:cfgStamp = [DateTime]::MinValue
 function Load-Config {
-    $defaults = @{ intervalMinutes = 22; sound = 'ding.mp3'; checkInEvery = 3; checkInSound = 'ding2.mp3'; volume = 1.0; breakMinutes = 5; duckOthersTo = 0.25 }
+    $defaults = @{ intervalMinutes = 22; sound = 'ding.mp3'; checkInEvery = 3; checkInSound = 'ding2.mp3'; volume = 1.0; breakMinutes = 5; duckOthersTo = 0.25; holdWhileRecording = @('Wispr Flow') }
     # Stamp first, so a bad file is read once and not on every tick. A bad file keeps the previous settings.
     $script:cfgStamp = (Get-Item $ConfigPath -ErrorAction SilentlyContinue).LastWriteTimeUtc
     $c = $defaults.Clone()
@@ -274,7 +289,8 @@ function Load-Config {
         if (Test-Path $ConfigPath) {
             $j = Get-Content $ConfigPath -Raw | ConvertFrom-Json
             foreach ($k in $defaults.Keys) {
-                if ($null -ne $j.$k -and "$($j.$k)" -ne '') { $c[$k] = $j.$k }
+                if ($k -eq 'holdWhileRecording') { if ($null -ne $j.$k) { $c[$k] = @($j.$k) } }   # [] turns holding off
+                elseif ($null -ne $j.$k -and "$($j.$k)" -ne '') { $c[$k] = $j.$k }
             }
         }
         foreach ($k in 'intervalMinutes', 'volume', 'breakMinutes', 'duckOthersTo') {
@@ -343,28 +359,52 @@ $script:retryAt = $null                               # when to replay a failed 
 $script:levels = @{}                                  # output name -> loudest signal this process sent it (Windows meters it before volume)
 $script:levelsRead = $false                           # the meters answered at least once for the current sound
 
-# Other apps go down while a ding plays and come back when it ends, fails, or after 30 s at the latest.
-$script:duckUntil = $null
+# Other apps go down while a ding plays and come back when it ends, fails, or after 30 s at the latest. A volume that
+# another app moved meanwhile is watched for a minute and put back once it returns to the ducked level.
+$script:duckUntil = $null                             # set while other apps are down for a ding
+$script:duckRows = @()                                # what Duck changed: session id, original volume, ducked volume
+$script:duckOwedUntil = $null                         # set while some of those are still owed back
+function Save-DuckRows {
+    try {
+        if ($script:duckRows.Count -gt 0) { Set-Content -LiteralPath $DuckedPath $script:duckRows -Encoding UTF8 }
+        else { Remove-Item -LiteralPath $DuckedPath -ErrorAction SilentlyContinue }
+    } catch { }
+}
 function Start-Duck {
     if (-not $script:audioInfo -or $script:cfg.duckOthersTo -ge 1 -or $script:cfg.volume -le 0) { return }
+    if ($script:duckRows.Count -gt 0) { Pay-DuckOwed $true }   # an earlier duck still owed back: settle it first
     $rows = [EyeAudio]::Duck($PID, [float]$script:cfg.duckOthersTo)
     if ($null -eq $rows -or $rows.Count -eq 0) { return }
-    try { Set-Content -LiteralPath $DuckedPath $rows -Encoding UTF8 } catch { }
+    $script:duckRows = @($rows)
+    Save-DuckRows
     $script:duckUntil = [DateTime]::Now.AddSeconds(30)
     Write-Log ('turned {0} other app sound(s) down to {1:p0} for the ding' -f $rows.Count, $script:cfg.duckOthersTo)
 }
 function Stop-Duck {
     if (-not $script:duckUntil) { return }
     $script:duckUntil = $null
-    try { [EyeAudio]::Restore() | Out-Null } catch { }
-    try { Remove-Item -LiteralPath $DuckedPath -ErrorAction SilentlyContinue } catch { }
+    Pay-DuckOwed $false
+    if ($script:duckRows.Count -gt 0) {
+        $script:duckOwedUntil = [DateTime]::Now.AddSeconds(60)
+        Write-Log "$($script:duckRows.Count) app sound(s) were changed by another app during the ding; putting them back when it lets go"
+    }
+}
+# Put back what is still at the ducked level. $final: give up on the rest (after the minute, or before a new duck).
+function Pay-DuckOwed([bool]$final) {
+    $before = $script:duckRows.Count
+    try { $script:duckRows = @([EyeAudio]::RestoreRows([string[]]$script:duckRows)) } catch { }
+    if ($script:duckOwedUntil -and $script:duckRows.Count -lt $before) { Write-Log "put $($before - $script:duckRows.Count) app sound(s) back after another app let go" }
+    if ($final -and $script:duckRows.Count -gt 0) { Write-Log "left $($script:duckRows.Count) app sound(s) where another app put them"; $script:duckRows = @() }
+    if ($script:duckRows.Count -eq 0) { $script:duckOwedUntil = $null }
+    Save-DuckRows
 }
 function Restore-SavedDuck {                          # at startup: undo a duck a crash left behind
     if (-not $script:audioInfo -or -not (Test-Path -LiteralPath $DuckedPath)) { return }
     try {
-        $n = [EyeAudio]::RestoreSaved(@(Get-Content -LiteralPath $DuckedPath -Encoding UTF8))
-        Write-Log "put $n app sound(s) back to their volume after an interrupted ding"
-        Remove-Item -LiteralPath $DuckedPath -ErrorAction SilentlyContinue
+        $script:duckRows = @(Get-Content -LiteralPath $DuckedPath -Encoding UTF8 | Where-Object { $_ })
+        $n = $script:duckRows.Count
+        Pay-DuckOwed $true
+        Write-Log "checked $n app sound(s) left turned down by an interrupted ding and put back the ones still down"
     } catch { Write-Log "could not restore volumes from ducked.txt: $_" }
 }
 
@@ -475,6 +515,7 @@ function Play-Sound($name = $script:cfg.sound, [string]$fallback = 'default-ding
 # Called from the tick: runs a due retry, and five seconds after Play, a sound that neither ended nor failed must be moving.
 function Confirm-Playback {
     if ($script:duckUntil -and [DateTime]::Now -ge $script:duckUntil) { Stop-Duck }
+    if ($script:duckOwedUntil) { Pay-DuckOwed ([DateTime]::Now -ge $script:duckOwedUntil) }
     if ($script:retryAt -and [DateTime]::Now -ge $script:retryAt) {
         $script:retryAt = $null
         New-Player
@@ -565,6 +606,26 @@ function Sync-Clock {
     }
 }
 
+# A due ding waits while a dictation app (holdWhileRecording) records, since those mute other audio, and plays
+# 1.5 s after it stops so its unmute lands first. After 5 minutes of holding it plays anyway.
+$script:holdSince = $null
+$script:holdWho = ''
+$script:lastRecording = [DateTime]::MinValue
+function Test-Held {
+    $names = @($script:cfg.holdWhileRecording | Where-Object { $_ })
+    if (-not $script:audioInfo -or $names.Count -eq 0) { return $false }
+    $now = [DateTime]::Now
+    $who = [EyeAudio]::Recording([string[]]$names)
+    if ($who) { $script:lastRecording = $now; $script:holdWho = $who }
+    if (-not $who -and ($now - $script:lastRecording).TotalSeconds -ge 1.5) {
+        if ($script:holdSince) { Write-Log ('{0} stopped recording: playing the ding held for {1:n0} s' -f $script:holdWho, ($now - $script:holdSince).TotalSeconds); $script:holdSince = $null }
+        return $false
+    }
+    if (-not $script:holdSince) { $script:holdSince = $now; Write-Log "ding held: $($script:holdWho) is recording" }
+    if (($now - $script:holdSince).TotalMinutes -ge 5) { Write-Log 'held 5 min, playing the ding anyway'; $script:holdSince = $null; $script:lastRecording = [DateTime]::MinValue; return $false }
+    return $true
+}
+
 # All state changes flow through the flag file so tray, .cmd files and startup behave identically.
 function Sync-State {
     $flag = Test-Path $EnabledFlag
@@ -590,6 +651,7 @@ function Sync-State {
     }
     $tip = if (-not $script:enabled) { 'EyeBreak - paused' }
     elseif ($script:screenOff) { 'EyeBreak - screen off, waiting' }
+    elseif ($script:holdSince) { "EyeBreak - ding waits for $($script:holdWho) to stop recording" }
     else {
         $m = [Math]::Max(0, [Math]::Ceiling(($script:nextDue - [DateTime]::Now).TotalMinutes))
         $k = Dings-UntilCheckIn
@@ -636,7 +698,7 @@ $timer.Add_Tick({
         }
         Sync-State
         Confirm-Playback
-        if ($script:enabled -and -not $script:screenOff -and [DateTime]::Now -ge $script:nextDue) { Reset-Timer; Invoke-Ding }
+        if ($script:enabled -and -not $script:screenOff -and [DateTime]::Now -ge $script:nextDue -and -not (Test-Held)) { Reset-Timer; Invoke-Ding }
         $script:lastTickError = ''
     } catch {
         if ("$_" -ne $script:lastTickError) {
@@ -655,7 +717,7 @@ Sync-State
     Write-ErrorLog "fatal: $_`n$($_.ScriptStackTrace)"
     Write-Log "fatal: $_ (details in error.log)"
 } finally {
-    try { Stop-Duck } catch { }
+    try { Stop-Duck; if ($script:duckRows.Count -gt 0) { Pay-DuckOwed $true } } catch { }
     Write-Log 'stopped'
     if ($tray) { $tray.Visible = $false; $tray.Dispose() }
     if ($script:display) { $script:display.Close() }

@@ -50,7 +50,8 @@ MP3, WAV, MP4, M4A all work. Until you add your own, two built-in chimes are use
   "checkInSound": "ding2.mp3",
   "volume": 1.0,
   "breakMinutes": 5,
-  "duckOthersTo": 0.25
+  "duckOthersTo": 0.25,
+  "holdWhileRecording": ["Wispr Flow"]
 }
 ```
 
@@ -60,6 +61,7 @@ MP3, WAV, MP4, M4A all work. Until you add your own, two built-in chimes are use
 - `checkInSound` — the check-in sound. Takes the same forms as `sound`.
 - `volume` — `0.0` to `1.0`.
 - `duckOthersTo` — while a ding plays, other apps (music, videos) are turned down to this share of their volume, then put back. `0.25` is a quarter; `1` turns it off. If EyeBreak is stopped mid-ding, it puts them back the next time it starts.
+- `holdWhileRecording` — dictation apps that mute other audio while you talk. A ding that comes due while one of them is recording waits, and plays a moment after you stop (or after 5 minutes regardless). Use the process name as Task Manager shows it; `[]` turns this off.
 - `breakMinutes` — how long the screen has to stay off to count as a break and restart the clock. Shorter than that, the countdown just pauses. `0` restarts the clock on every screen wake.
 
 ## Updating
