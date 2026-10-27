@@ -16,6 +16,7 @@
 # duckOthersTo: while a ding plays, other apps (music, browser) are turned down to this share of their volume and put
 #   back when it ends (default 0.25; 1 turns it off). One that another app moved during the ding is put back once
 #   that app lets go. Their levels are saved to ducked.txt first, so a crash mid-ding is undone at the next start.
+# notify: true (default) shows a notification by the clock with every ding, so a missed sound is not a missed break.
 # Dings opt out of Windows' call ducking, so they play at full volume over a call or dictation (Wispr Flow, Discord).
 # holdWhileRecording: process names whose microphone use makes a due ding wait until they stop (default [] = never
 #   wait). For an app that silences other audio some way Windows lets no one opt out of.
@@ -295,7 +296,7 @@ Trim-Log
 $script:cfg = $null
 $script:cfgStamp = [DateTime]::MinValue
 function Load-Config {
-    $defaults = @{ intervalMinutes = 22; sound = 'ding.mp3'; checkInEvery = 3; checkInSound = 'ding2.mp3'; volume = 1.0; breakMinutes = 5; duckOthersTo = 0.25; holdWhileRecording = @() }
+    $defaults = @{ intervalMinutes = 22; sound = 'ding.mp3'; checkInEvery = 3; checkInSound = 'ding2.mp3'; volume = 1.0; breakMinutes = 5; duckOthersTo = 0.25; holdWhileRecording = @(); notify = $true }
     # Stamp first, so a bad file is read once and not on every tick. A bad file keeps the previous settings.
     $script:cfgStamp = (Get-Item $ConfigPath -ErrorAction SilentlyContinue).LastWriteTimeUtc
     $c = $defaults.Clone()
@@ -303,7 +304,8 @@ function Load-Config {
         if (Test-Path $ConfigPath) {
             $j = Get-Content $ConfigPath -Raw | ConvertFrom-Json
             foreach ($k in $defaults.Keys) {
-                if ($k -eq 'holdWhileRecording') { if ($null -ne $j.$k) { $c[$k] = @($j.$k) } }   # [] turns holding off
+                if ($k -eq 'notify') { if ($null -ne $j.$k) { $c[$k] = [bool]$j.$k } }   # absent keeps the default
+                elseif ($k -eq 'holdWhileRecording') { if ($null -ne $j.$k) { $c[$k] = @($j.$k) } }   # [] turns holding off
                 elseif ($null -ne $j.$k -and "$($j.$k)" -ne '') { $c[$k] = $j.$k }
             }
         }
@@ -600,8 +602,14 @@ function Invoke-Ding {
     $script:dingCount++
     $n = $script:cfg.checkInEvery
     $next = "next $($script:nextDue.ToString('HH:mm:ss'))"
-    if ($n -gt 0 -and ($script:dingCount % $n) -eq 0) { Play-Sound $script:cfg.checkInSound 'default-checkin.wav' "check-in ding #$($script:dingCount), $next" }
+    $checkIn = $n -gt 0 -and ($script:dingCount % $n) -eq 0
+    if ($checkIn) { Play-Sound $script:cfg.checkInSound 'default-checkin.wav' "check-in ding #$($script:dingCount), $next" }
     else { Play-Sound -what "ding #$($script:dingCount), $next" }
+    if ($script:cfg.notify) {                         # seen even when the sound is missed
+        $msg = if ($checkIn) { 'Check-in: stand up, rest your eyes, and look around. Anything else need you?' }
+               else { 'Eye break: stand up and look away from the screen for a bit.' }
+        try { $tray.ShowBalloonTip(10000, 'EyeBreak', $msg, [System.Windows.Forms.ToolTipIcon]::Info) } catch { }
+    }
 }
 function Dings-UntilCheckIn {
     $n = $script:cfg.checkInEvery
