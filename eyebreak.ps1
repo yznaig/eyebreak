@@ -16,8 +16,9 @@
 # duckOthersTo: while a ding plays, other apps (music, browser) are turned down to this share of their volume and put
 #   back when it ends (default 0.25; 1 turns it off). One that another app moved during the ding is put back once
 #   that app lets go. Their levels are saved to ducked.txt first, so a crash mid-ding is undone at the next start.
-# holdWhileRecording: process names of dictation apps that mute other audio while recording (default ["Wispr Flow"]).
-#   A ding that comes due while one records waits and plays right after; [] turns this off.
+# Dings opt out of Windows' call ducking, so they play at full volume over a call or dictation (Wispr Flow, Discord).
+# holdWhileRecording: process names whose microphone use makes a due ding wait until they stop (default [] = never
+#   wait). For an app that silences other audio some way Windows lets no one opt out of.
 # eyebreak.log records every ding with the Windows output it went to, whether it played to the end and reached that
 #   output (a signal meter, read before volume), or why it failed, and every clock restart with its reason. A failed ding is retried once
 #   with a fresh player; if that fails too, or a ding ends without any sound reaching an output, a notification shows.
@@ -133,6 +134,7 @@ public static class EyeAudio {
         int GetIconPath(out IntPtr p); int SetIconPath(IntPtr a, IntPtr b); int GetGroupingParam(out Guid g); int SetGroupingParam(IntPtr a, IntPtr b);
         int RegisterAudioSessionNotification(IntPtr a); int UnregisterAudioSessionNotification(IntPtr a);
         int GetSessionIdentifier(out IntPtr a); int GetSessionInstanceIdentifier(out IntPtr a); int GetProcessId(out int pid);
+        [PreserveSig] int IsSystemSoundsSession(); int SetDuckingPreference([MarshalAs(UnmanagedType.Bool)] bool optOut);
     }
     [Guid("C02216F6-8C67-4B5B-9D00-D008E73E0064"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     interface IAudioMeterInformation { int GetPeakValue(out float p); }
@@ -244,6 +246,18 @@ public static class EyeAudio {
             return Name(d);
         } catch { return "unknown output"; }
     }
+    // Opt this process's sessions out of Windows' call ducking (the "reduce other sounds by 80%" Windows applies
+    // while it detects a call or dictation). Returns how many sessions were set.
+    public static int OptOutOfDucking(int pid) {
+        int n = 0;
+        try {
+            foreach (KeyValuePair<int, IAudioSessionControl2> kv in Sessions()) {
+                if (kv.Key != pid) continue;
+                try { kv.Value.SetDuckingPreference(true); n++; } catch { }
+            }
+        } catch { }
+        return n;
+    }
     // One "output name<TAB>level" row per audio session of this process; null when the meters cannot be read.
     public static string[] OwnLevels(int pid) {
         try {
@@ -281,7 +295,7 @@ Trim-Log
 $script:cfg = $null
 $script:cfgStamp = [DateTime]::MinValue
 function Load-Config {
-    $defaults = @{ intervalMinutes = 22; sound = 'ding.mp3'; checkInEvery = 3; checkInSound = 'ding2.mp3'; volume = 1.0; breakMinutes = 5; duckOthersTo = 0.25; holdWhileRecording = @('Wispr Flow') }
+    $defaults = @{ intervalMinutes = 22; sound = 'ding.mp3'; checkInEvery = 3; checkInSound = 'ding2.mp3'; volume = 1.0; breakMinutes = 5; duckOthersTo = 0.25; holdWhileRecording = @() }
     # Stamp first, so a bad file is read once and not on every tick. A bad file keeps the previous settings.
     $script:cfgStamp = (Get-Item $ConfigPath -ErrorAction SilentlyContinue).LastWriteTimeUtc
     $c = $defaults.Clone()
@@ -358,6 +372,7 @@ $script:retried = $false                              # the current sound alread
 $script:retryAt = $null                               # when to replay a failed sound with a fresh player
 $script:levels = @{}                                  # output name -> loudest signal this process sent it (Windows meters it before volume)
 $script:levelsRead = $false                           # the meters answered at least once for the current sound
+$script:optedOut = 0                                  # this process's sessions opted out of Windows call ducking
 
 # Other apps go down while a ding plays and come back when it ends, fails, or after 30 s at the latest. A volume that
 # another app moved meanwhile is watched for a minute and put back once it returns to the ducked level.
@@ -421,6 +436,7 @@ function Play-Fallback {
 function Read-Levels {
     if (-not $script:playLive) { $meterTimer.Stop(); return }
     if (-not $script:audioInfo) { return }
+    if ($script:optedOut -eq 0) { $script:optedOut = [EyeAudio]::OptOutOfDucking($PID) }   # a session this play just created
     $rows = [EyeAudio]::OwnLevels($PID)
     if ($null -eq $rows) { return }
     $script:levelsRead = $true
@@ -492,6 +508,8 @@ function Start-Playback([string]$file, [string]$what) {
     $out = if ($script:audioInfo) { [EyeAudio]::DefaultOutput() } else { 'unknown output' }
     Write-Log "${what}: $($script:playFile) at volume $($script:cfg.volume), default output $out"
     try { Start-Duck } catch { Write-Log "could not turn other apps down: $_" }
+    $script:optedOut = 0
+    if ($script:audioInfo) { try { $script:optedOut = [EyeAudio]::OptOutOfDucking($PID) } catch { } }
     try {
         $script:player.Open([Uri]$file)
         $script:player.Volume = $script:cfg.volume
